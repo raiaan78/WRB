@@ -4,7 +4,6 @@ from tkinter import filedialog, messagebox
 from collections import defaultdict
 import pandas as pd
 import openpyxl
-import numpy as np
 
 class ExcelLoaderApp:
     def __init__(self, root):
@@ -18,7 +17,13 @@ class ExcelLoaderApp:
         self.Transaction_types = None
         self.Limits = None
         self.SBT_model = None
-        
+
+        #set line of business
+        self.lob = ""
+
+        #Path for template file
+        self.template = ""
+
         # Filepaths for display
         self.loaded_files = []
 
@@ -42,16 +47,26 @@ class ExcelLoaderApp:
         self.covterm_options_btn = tk.Button(self.root, text='Load Limit Deductible File', command=lambda: self.load_file('covterm_options'))
         self.covterm_options_btn.pack(pady=10)
 
+        self.input_template_btn = tk.Button(self.root, text='Load Template File', command=lambda: self.load_file('input_template'))
+        self.input_template_btn.pack(pady=10)
+
         #self.coverage_exclusions_btn = tk.Button(self.root, text='Load Coverage Exclusions File', command=lambda: self.load_file('coverage_exclusions'))
         #self.coverage_exclusions_btn.pack(pady=10)
 
-        
+        options = ["GL","CP"]
+        self.clicked = tk.StringVar(self.root)
+        self.clicked.set("Select your line of business")
+        self.option = tk.OptionMenu(self.root, self.clicked, *options)
+        self.option.pack()
 
         self.loaded_label = tk.Label(self.root, text='')
         self.loaded_label.pack(pady=20)
 
         self.process_btn = tk.Button(self.root, text='Process Files', command=self.process_files, state=tk.DISABLED)
         self.process_btn.pack(pady=20)
+
+    def set_lob(self):
+        self.lob = self.clicked.get()
 
     def load_file(self, file_type):
         filepath = filedialog.askopenfilename(title=f'Select {file_type} Excel File', filetypes=(('Excel Files', '*.xls;*.xlsx;*.xlsm'), ('All Files', '*.*')))
@@ -60,33 +75,33 @@ class ExcelLoaderApp:
 
         filename = os.path.basename(filepath)
 
-        if file_type == 'coverage' and filename == '20230906 - Coverage Data Prod  BLS-BAR-CCI-BOG-BRE-BPT local copy.xlsx':
+        if file_type == 'coverage' and "Coverage" in filename:
             self.Coverages = pd.read_excel(io=filepath, usecols = "A:B, E:I, L, R:S, W, X, AB, AN")
             self.coverage_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
-        elif file_type == 'forms' and filename == '20230831 GL Forms to coverages local copy.xlsx':
+        elif file_type == 'forms' and "Forms To Coverages" in filename:
             self.Forms = pd.read_excel(io=filepath, usecols = "A:C, F, H:I")
             self.forms_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
-        elif file_type == 'inference' and filename == '20230725 - GL Forms Steps.xlsx':
+        elif file_type == 'inference' and "Steps" in filename:
             self.Inference = pd.read_excel(io=filepath)
             self.inference_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
-        elif file_type == 'QRG' and filename == '20230907 GL Forms QRG.xlsx':
+        elif file_type == 'QRG' and "QRG" in filename:
             self.Transaction_types = pd.read_excel(io=filepath, usecols = "B, H")
             self.Transaction_types.drop_duplicates(inplace=True)
             self.qrg_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
-        elif file_type == 'covterm_options' and filename == '20230802 GL CPU Limit-Deductibles.xlsx':
-            self.Limits = pd.read_excel(io=filepath, usecols = "C:D, H, L")
+        elif file_type == 'covterm_options' and "Limit" in filename:
+            self.Limits = pd.read_excel(io=filepath, usecols = "C:D, F, H, L")
             self.covterm_options_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
-        elif file_type == 'SBT_extract' and filename == 'ProductModelExport_GL7line_062023.xlsm':
+        elif file_type == 'SBT_extract' and "ProductModelExport" in filename:
             self.SBT_model = pd.read_excel(io=filepath, sheet_name = "Clause", usecols = "B, C, I")
             #Parse the SBT model since multiple form IDs are within one cell in some cases
             self.SBT_model = self.SBT_model.assign(Form_ID = self.SBT_model['Form(s)'].str.split(r'\n')).explode('Form(s)')
@@ -96,6 +111,11 @@ class ExcelLoaderApp:
             self.sbt_extract_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
+        elif file_type == 'input_template' and "Product Model" in filename:
+            self.template = filepath
+            self.input_template_btn.config(state=tk.DISABLED)
+            self.loaded_files.append(filename)
+
         else:
             messagebox.showerror("Error", f"Invalid file selected for {file_type}. Please select the correct file.")
 
@@ -103,8 +123,9 @@ class ExcelLoaderApp:
         self.loaded_label.config(text=', '.join(self.loaded_files))
 
         # Enable the process button if all files are loaded
-        if len(self.loaded_files) == 6:  # Assuming you have 6 files to load
+        if len(self.loaded_files) == 7:  # Assuming you have 7 files to load
             self.process_btn.config(state=tk.NORMAL)
+            self.set_lob()
 
     def process_files(self):
         def print_coverages(sheet, row):
@@ -131,6 +152,8 @@ class ExcelLoaderApp:
 
             if len(cov_states[cov_name]) == len(US_states) or "A1" in cov_states[cov_name]:
                 sheet[cell3] = "All States"
+            elif len(cov_states[cov_name]) <= 10:
+                sheet[cell3] = ','.join(cov_states[cov_name])
             else:
                 difference = US_states.difference(cov_states[cov_name])
                 sheet[cell3] = "All states except: " + ','.join(difference)
@@ -158,38 +181,39 @@ class ExcelLoaderApp:
             else:
                 sheet[cell8] = "Suggested"
 
-            #Populate Subline C items
-            code = subline[cov_name]
+            if self.lob == "GL":
+                #Populate Subline C items
+                code = subline[cov_name]
 
-            if code == '          ':
-                pass
-            elif code == 334 or code == 336:
-                cell15 = "R" + str(row)
-                cell16 = "S" + str(row)
-                sheet[cell15] = "x"
-                sheet[cell16] = "x"
-            elif code == 332:
-                cell15 = "T" + str(row)
-                cell16 = "U" + str(row)
-                sheet[cell15] = "x"
-                sheet[cell16] = "x"
-            elif code == 317:
-                cell15 = "V" + str(row)
-                cell16 = "W" + str(row)
-                sheet[cell15] = "x"
-                sheet[cell16] = "x"
-            elif code == 325:
-                cell15 = "X" + str(row)
-                cell16 = "Y" + str(row)
-                sheet[cell15] = "x"
-                sheet[cell16] = "x"
-            elif code == 360:
-                cell15 = "Z" + str(row)
-                cell16 = "AA" + str(row)
-                sheet[cell15] = "x"
-                sheet[cell16] = "x"
-            else:
-                sheet[cell4] = str(code) + "/" + sheet[cell4].value
+                if code == '          ':
+                    pass
+                elif code == 334 or code == 336:
+                    cell15 = "R" + str(row)
+                    cell16 = "S" + str(row)
+                    sheet[cell15] = "x"
+                    sheet[cell16] = "x"
+                elif code == 332:
+                    cell15 = "T" + str(row)
+                    cell16 = "U" + str(row)
+                    sheet[cell15] = "x"
+                    sheet[cell16] = "x"
+                elif code == 317:
+                    cell15 = "V" + str(row)
+                    cell16 = "W" + str(row)
+                    sheet[cell15] = "x"
+                    sheet[cell16] = "x"
+                elif code == 325:
+                    cell15 = "X" + str(row)
+                    cell16 = "Y" + str(row)
+                    sheet[cell15] = "x"
+                    sheet[cell16] = "x"
+                elif code == 360:
+                    cell15 = "Z" + str(row)
+                    cell16 = "AA" + str(row)
+                    sheet[cell15] = "x"
+                    sheet[cell16] = "x"
+                else:
+                    sheet[cell4] = str(code) + "/" + sheet[cell4].value
                 
             #Populate scheduled field
             cell17 = "N" + str(row)
@@ -225,10 +249,16 @@ class ExcelLoaderApp:
                 form_edition = conditions[cov_name][index][2].replace('/'," ")
                 form_pattern = form_number.replace(" ","") + form_edition.replace(" ","")
 
-            cell9 = "AF" + str(row)
-            cell10 = "AG" + str(row)
-            cell11 = "AH" + str(row)
-            cell12 = "AI" + str(row)
+            if self.lob == "CP":
+                cell9 = "AF" + str(row)
+                cell10 = "AG" + str(row)
+                cell11 = "AH" + str(row)
+                cell12 = "AI" + str(row)
+            else:
+                cell9 = "T" + str(row)
+                cell10 = "U" + str(row)
+                cell11 = "V" + str(row)
+                cell12 = "W" + str(row)
 
             sheet[cell9] = form_pattern
             sheet[cell10] = form_number
@@ -255,17 +285,26 @@ class ExcelLoaderApp:
                 sheet[cell13] = "ISO"
 
             #Populate form states
-            cell14 = "AJ" + str(row)
+            if self.lob == "GL":
+                cell14 = "AJ" + str(row)
+            else:
+                cell14 = "X" + str(row)
+
             state_set = set(form_states[form_number])
 
             if len(state_set) == len(US_states) or "A1" in state_set:
                 sheet[cell14] = "All States"
+            elif len(state_set) <= 10:
+                sheet[cell14] = ','.join(state_set)
             else:
                 difference = US_states.difference(state_set)
                 sheet[cell14] = "All states except: " + ','.join(difference)
 
             #Populate Transaction Types
-            cell19 = "AN" + str(row)
+            if self.lob == "GL":
+                cell19 = "AN" + str(row)
+            else:
+                cell19 = "AB" + str(row)
 
             if transactions[form_number] == "RETAIN":
                 sheet[cell19] = "Submission, Policy, Change, Rewrite, Rewrite New Account, Renewal"
@@ -394,7 +433,8 @@ class ExcelLoaderApp:
         parent_forms = parent_forms.groupby('COVERAGE_DESC')[['FORM_NBR', 'Form Title', 'FORM_EDITION']].apply(lambda x: x.values.tolist()).to_dict()
 
         #Begin writing to product model
-        product_model = openpyxl.load_workbook("C:\\Users\\rvalli001\\Desktop\\WRB\\Coverages\\GL\\PC - SSP - GL Product Model & Forms Inference_Draft.xlsx")
+        #product_model = openpyxl.load_workbook("C:\\Users\\rvalli001\\Desktop\\WRB\\Coverages\\GL\\PC - SSP - GL Product Model & Forms Inference_Draft.xlsx")
+        product_model = openpyxl.load_workbook(self.template)
 
         #Gather exclusions and conditions
         for cov in parent_forms.keys():
@@ -496,6 +536,9 @@ class ExcelLoaderApp:
         #Dictionary of coverage description->[form #, form title, form edition]
         covterm_default_values = self.Limits.groupby('COVERAGE_DESC')[['LIMIT_DED_DESC', 'DEFAULT_FLAG']].apply(lambda x: x.values.tolist()).to_dict()
 
+        #Dictionary of coverage description->limit_ded_option
+        covterm_term_value_type = self.Limits.groupby('COVERAGE_DESC')['LIMIT_DED_OPTION'].apply(lambda x: x.values.tolist()).to_dict()
+
         for index, row in self.Limits.iterrows():
             covterm_options_states[row["COVERAGE_DESC"]].add(row["STATE_CODE"])
             covterm_options_list[row["COVERAGE_DESC"]].add(row["LIMIT_DED_DESC"])
@@ -508,6 +551,9 @@ class ExcelLoaderApp:
         coverage_term_options_sheet = product_model["Coverage Term Options"]
         coverage_terms_options_row = 3
 
+        direct_term = ["ENTERABLE", "ENTER_INC", "DEFAULT_NC", "DEFAULT_EN", "LABEL_NC"]
+        option_term = ["DROPDOWN", "DEFAULT_DD", "FILTER_DD"]
+
         for parent in parent_child.keys():
             for child in parent_child[parent]:
                 #Populate coverage terms sheet
@@ -517,11 +563,26 @@ class ExcelLoaderApp:
                 coverage_terms_sheet[cov_term_parent_output] = parent
                 coverage_terms_sheet[cov_term_child_output] = child
 
+                term_type = "J" + str(coverage_terms_row)
+                value_type = "K" + str(coverage_terms_row)
+
+                if child in covterm_term_value_type:
+                    option = covterm_term_value_type[child]
+
+                    if option in direct_term:
+                        coverage_terms_sheet[term_type] = "Direct"
+                        coverage_terms_sheet[value_type] = "Other"
+                    if option in option_term:
+                        coverage_terms_sheet[term_type] = "Option"
+                        coverage_terms_sheet[value_type] = "Other"
+
                 child_states = "N" + str(coverage_terms_row)
                 states = covterm_states[child]
                 
                 if len(states) == len(US_states) or "A1" in states:
                     coverage_terms_sheet[child_states] = "All States"
+                elif len(states) <= 10:
+                    coverage_terms_sheet[child_states] = ','.join(states)
                 else:
                     difference = US_states.difference(states)
                     coverage_terms_sheet[child_states] = "All states except: " + ','.join(difference)
@@ -554,13 +615,16 @@ class ExcelLoaderApp:
 
                     if len(states) == len(US_states) or "A1" in states:
                         coverage_term_options_sheet[child_states2] = "All States"
+                    elif len(states) <= 10:
+                        coverage_term_options_sheet[child_states2] = ','.join(states)
                     else:
                         difference = US_states.difference(states)
                         coverage_term_options_sheet[child_states2] = "All states except: " + ','.join(difference)
                     
                     coverage_terms_options_row+=1
 
-        product_model.save("C:\\Users\\rvalli001\\Desktop\\WRB\\Coverages\\GL\\PC - SSP - GL Product Model & Forms Inference_Draft.xlsx")
+        #product_model.save("C:\\Users\\rvalli001\\Desktop\\WRB\\Coverages\\GL\\PC - SSP - GL Product Model & Forms Inference_Draft.xlsx")
+        product_model.save(self.template)
 
         messagebox.showinfo('Processed', 'All Excel files have been consolidated!')
 
