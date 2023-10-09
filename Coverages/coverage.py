@@ -4,6 +4,7 @@ from tkinter import filedialog, messagebox
 from collections import defaultdict
 import pandas as pd
 import openpyxl
+from datetime import date
 
 class ExcelLoaderApp:
     def __init__(self, root):
@@ -17,6 +18,9 @@ class ExcelLoaderApp:
         self.Transaction_types = None
         self.Limits = None
         self.SBT_model = None
+        self.Exclusions = None
+        self.today = date.today()
+        self.files_used = ""
 
         #set line of business
         self.lob = ""
@@ -44,14 +48,14 @@ class ExcelLoaderApp:
         self.qrg_btn = tk.Button(self.root, text='Load Forms QRG File', command=lambda: self.load_file('QRG'))
         self.qrg_btn.pack(pady=10)
 
+        self.coverage_exclusions_btn = tk.Button(self.root, text='Load Coverage Exclusions File', command=lambda: self.load_file('coverage_exclusions'))
+        self.coverage_exclusions_btn.pack(pady=10)
+
         self.covterm_options_btn = tk.Button(self.root, text='Load Limit Deductible File', command=lambda: self.load_file('covterm_options'))
         self.covterm_options_btn.pack(pady=10)
 
         self.input_template_btn = tk.Button(self.root, text='Load Template File', command=lambda: self.load_file('input_template'))
         self.input_template_btn.pack(pady=10)
-
-        #self.coverage_exclusions_btn = tk.Button(self.root, text='Load Coverage Exclusions File', command=lambda: self.load_file('coverage_exclusions'))
-        #self.coverage_exclusions_btn.pack(pady=10)
 
         options = ["GL","CP"]
         self.clicked = tk.StringVar(self.root)
@@ -76,7 +80,7 @@ class ExcelLoaderApp:
         filename = os.path.basename(filepath)
 
         if file_type == 'coverage' and "Coverage" in filename:
-            self.Coverages = pd.read_excel(io=filepath, usecols = "A:B, E:I, L, R:S, W, X, AB, AN")
+            self.Coverages = pd.read_excel(io=filepath, usecols = "A, D:G, J, S:T, X, Y, AM, BA")
             self.coverage_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
@@ -102,13 +106,18 @@ class ExcelLoaderApp:
             self.loaded_files.append(filename)
 
         elif file_type == 'SBT_extract' and "ProductModelExport" in filename:
-            self.SBT_model = pd.read_excel(io=filepath, sheet_name = "Clause", usecols = "B, C, I")
+            self.SBT_model = pd.read_excel(io=filepath, sheet_name = "Clause", usecols = "B, C, F, I")
             #Parse the SBT model since multiple form IDs are within one cell in some cases
             self.SBT_model = self.SBT_model.assign(Form_ID = self.SBT_model['Form(s)'].str.split(r'\n')).explode('Form(s)')
             self.SBT_model = self.SBT_model.explode('Form_ID')
-            self.SBT_model = self.SBT_model[["Description", "Type", "Form_ID"]]
+            self.SBT_model = self.SBT_model[["Description", "Type", "Category", "Form_ID"]]
             self.SBT_model.drop_duplicates(inplace=True)
             self.sbt_extract_btn.config(state=tk.DISABLED)
+            self.loaded_files.append(filename)
+
+        elif file_type == 'coverage_exclusions' and "Exclusion" in filename:
+            self.Exclusions = pd.read_excel(io=filepath, usecols = "B:D")
+            self.coverage_exclusions_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
         elif file_type == 'input_template' and "Product Model" in filename:
@@ -123,29 +132,69 @@ class ExcelLoaderApp:
         self.loaded_label.config(text=', '.join(self.loaded_files))
 
         # Enable the process button if all files are loaded
-        if len(self.loaded_files) == 7:  # Assuming you have 7 files to load
+        if len(self.loaded_files) == 8:  # Assuming you have 8 files to load
             self.process_btn.config(state=tk.NORMAL)
-            self.set_lob()
 
     def process_files(self):
+        self.set_lob()
+
         def print_coverages(sheet, row):
+            #Populate files used
+            cell22 = "D" + str(row)
+            sheet[cell22] = self.files_used
+
             #Populate coverage name
             cell = "G" + str(row)
             sheet[cell] = cov_name
 
-            #Populate operating units
+            #Populate today's date
+            cell20 = "C" + str(row)
+            sheet[cell20] = self.today
+
+            #Populate operating units and underwriting companies
             cell2 = "O" + str(row)
-            operating_units = set()
-
-            #Populate underwriting companies
             cell7 = "P" + str(row)
-            uw_companies = ""
-            for j in cov_opunit[cov_name].keys():
-                uw_companies = uw_companies + j + "(" + ','.join(cov_opunit[cov_name][j]) + ")" + "\n"
-                operating_units.update(cov_opunit[cov_name][j])
 
-            sheet[cell2] = ','.join(operating_units)
-            sheet[cell7] = uw_companies
+            #Scenario 4
+            if cov_name not in ou_and_uw_exclusions:
+                sheet[cell2] = "All"
+                sheet[cell7] = "All"
+            else:
+                null_operating_unit = 0
+                null_underwriting_company = 0
+                ou_exception = set()
+                uw_exception = set()
+
+                for pair in ou_and_uw_exclusions[cov_name]:
+                    if not pd.isna(pair[0]) and not pd.isna(pair[1]):
+                        if pair[0].rstrip() in ou_abbreviations:
+                            ou_exception.add(pair[0].rstrip())
+                            uw_exception.add(pair[1] + "(" + ou_abbreviations[pair[0].rstrip()] + ")")
+                        continue
+                    
+                    if pd.isna(pair[0]):
+                        null_operating_unit+=1
+                    else:
+                        if pair[0].rstrip() in ou_abbreviations:
+                            ou_exception.add(ou_abbreviations[pair[0].rstrip()])
+
+                    if pd.isna(pair[1]):
+                        null_underwriting_company+=1
+                    else:
+                        uw_exception.add(pair[1])
+
+                #Scenario 2
+                if null_operating_unit == len(ou_and_uw_exclusions[cov_name]) and null_underwriting_company == 0:
+                    sheet[cell2] = "All"
+                    sheet[cell7] = "All except " + ', '.join(uw_exception)
+                #Scenario 3
+                elif null_operating_unit == 0 and null_underwriting_company == len(ou_and_uw_exclusions[cov_name]):
+                    sheet[cell2] = "All except " + ', '.join(ou_exception)
+                    sheet[cell7] = "All"
+                #Scenario 1
+                else:
+                    sheet[cell2] = "All except " + ', '.join(ou_exception)
+                    sheet[cell7] = "All except " + ', '.join(uw_exception)
 
             #Populate coverage states
             cell3 = "I" + str(row)
@@ -249,7 +298,7 @@ class ExcelLoaderApp:
                 form_edition = conditions[cov_name][index][2].replace('/'," ")
                 form_pattern = form_number.replace(" ","") + form_edition.replace(" ","")
 
-            if self.lob == "CP":
+            if self.lob == "GL":
                 cell9 = "AF" + str(row)
                 cell10 = "AG" + str(row)
                 cell11 = "AH" + str(row)
@@ -268,21 +317,31 @@ class ExcelLoaderApp:
             #Populate SBT/OOTB
             cell18 = "F" + str(row)
 
-            if form_pattern[:2] == "CG" and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
-                sheet[cell18] = "New"
-            elif form_number.replace(" ","") in sbt.keys():
+            if form_pattern in sbt:
                 sheet[cell18] = "SBT"
                 #Change coverage name to whatever is in the SBT model
-                #sheet[cell] = sbt[form_number.replace(" ","")]
-            else:
-                pass
+                sheet["G" + str(row)].value = sbt[form_pattern]
+
+            if self.lob == "GL" and form_pattern[:2] == "CG" and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                sheet[cell18] = "New"
+
+            if self.lob == "CP" and form_pattern[:2] == "CP" and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                sheet[cell18] = "New"
 
             #ISO/Proprietary
             cell13 = "H" + str(row)
-            if (form_pattern[:2] == "CG" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
-                sheet[cell13] = "Proprietary"
-            else:
-                sheet[cell13] = "ISO"
+
+            if self.lob == "GL":
+                if (form_pattern[:2] == "CG" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell13] = "Proprietary"
+                else:
+                    sheet[cell13] = "ISO"
+
+            if self.lob == "CP":
+                if (form_pattern[:2] == "CP" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell13] = "Proprietary"
+                else:
+                    sheet[cell13] = "ISO"
 
             #Populate form states
             if self.lob == "GL":
@@ -290,7 +349,7 @@ class ExcelLoaderApp:
             else:
                 cell14 = "X" + str(row)
 
-            state_set = set(form_states[form_number])
+            state_set = set(form_states[form_number, form_edition.replace(" ","/")])
 
             if len(state_set) == len(US_states) or "A1" in state_set:
                 sheet[cell14] = "All States"
@@ -334,6 +393,13 @@ class ExcelLoaderApp:
         result.columns = ['ROLL_ON_CND3_CODE', 'Inference Logic']
         result.to_excel("output.xlsx")
         '''
+
+        self.files_used = ', '.join(self.loaded_files[:6])
+
+        ou_and_uw_exclusions = self.Exclusions.groupby('COVERAGE_DESC')[['PRODUCT_NAME', 'COMPANY_NAME']].apply(lambda x: x.values.tolist()).to_dict()
+
+        ou_abbreviations = {"Berkley Entertainment":"BSU","Berkley Financial Specialists":"FIN","Berkley Fire and Marine":"BFM","Berkley Healthcare":"BHC","Berkley Healthcare Medical Pro":"BMU","Berkley Human Services":"RIC","Berkley Life Sciences":"BLS","Berkley Oil & Gas":"BOG","Berkley Prime Transportation":"BPT","Berkley Product Protection":"BPR","Berkley Program Specialists":"BUP","Berkley Renewable Energy":"BRE","Berkley Risk Administrators Co":"BRAC","Berkley Shared Services":"BSS","Berkley Small Business":"BSB","Berkley Technology Underwriters":"BTU","BPS - Agent Will Bill":"BPS","Carolina Casualty Insurance":"CCI","Continental Western Group":"CWG","Intrepid Direct Insurance":"IDI"}
+
         transactions = self.Transaction_types.set_index("Form Number").to_dict()["RENEWAL_ACTION_C"]
         
         #Dictionary for SBT Forms ID->Coverage Description
@@ -341,6 +407,9 @@ class ExcelLoaderApp:
 
         #Dictionary for SBT Form ID->Type of form (exclusion, condition)
         sbt_type = self.SBT_model.set_index("Form_ID").to_dict()["Type"]
+
+        #Dictionary for SBT Form ID->Category
+        sbt_category = self.SBT_model.groupby("Form_ID")["Category"].apply(lambda x: x.values.tolist()).to_dict()
 
         #List of valid US States
         US_states = {"AK","AL","AR","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","IZ","KS","KY","LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WV","WY"}
@@ -350,9 +419,6 @@ class ExcelLoaderApp:
 
         #Hashtable for coverage code->coverage description
         coverage = defaultdict()
-
-        #Hashtable for parent coverage description->operating unit
-        cov_opunit = defaultdict(lambda: defaultdict(set))
 
         #Hashtable for parent coverage description->states
         cov_states = defaultdict(set)
@@ -398,7 +464,6 @@ class ExcelLoaderApp:
             
             #Parent
             else:
-                cov_opunit[row["COVERAGE_DESC"]][row["COMPANY_NAME"]].add(row["Operating Unit"].rstrip())
                 coverage[row["COVERAGE_CODE"]] = row["COVERAGE_DESC"]
                 cov_states[row["COVERAGE_DESC"]].add(row["STATE_CODE"])
                 major_peril[row["COVERAGE_DESC"]].add(str(row["MAJOR_PERIL_C"]))
@@ -422,7 +487,8 @@ class ExcelLoaderApp:
         self.Forms['FORM_EDITION'] = self.Forms["FORM_EDITION"].dt.strftime('%m/%y')
 
         #Group form states by form #
-        form_states = self.Forms.groupby('FORM_NBR')['STATE_CODE'].apply(lambda x: x.values.tolist()).to_dict()
+        form_states = self.Forms.groupby(['FORM_NBR','FORM_EDITION'])['STATE_CODE'].apply(lambda x: x.values.tolist()).to_dict()
+        #form_states = self.Forms.groupby('FORM_NBR')['FORM_EDITION','STATE_CODE'].apply(lambda x: x.values.tolist()).to_dict()
         self.Forms.drop(columns = 'STATE_CODE', inplace = True)
 
         #Parent coverage dictionary joined with Forms file
@@ -433,7 +499,6 @@ class ExcelLoaderApp:
         parent_forms = parent_forms.groupby('COVERAGE_DESC')[['FORM_NBR', 'Form Title', 'FORM_EDITION']].apply(lambda x: x.values.tolist()).to_dict()
 
         #Begin writing to product model
-        #product_model = openpyxl.load_workbook("C:\\Users\\rvalli001\\Desktop\\WRB\\Coverages\\GL\\PC - SSP - GL Product Model & Forms Inference_Draft.xlsx")
         product_model = openpyxl.load_workbook(self.template)
 
         #Gather exclusions and conditions
@@ -490,10 +555,11 @@ class ExcelLoaderApp:
 
             if num_coverage_rows > 0:
                 cov_index = 0 
-                sheet = product_model["Coverages & Forms"]    
+                sheet = product_model["Coverages & Forms"]
+                
                 while cov_index <= num_coverage_rows - 1:
                     print_coverages(sheet, coverages_and_forms_row)
-
+                    
                     #Check if this coverage has a form
                     if cov_name in parent_forms and cov_index < num_coverage_rows:
                         print_forms(sheet, coverages_and_forms_row, cov_index, "General")
@@ -503,10 +569,11 @@ class ExcelLoaderApp:
 
             if num_exclusion_rows > 0:
                 exclusion_index = 0
-                sheet = product_model["Exclusions & Forms"]    
+                sheet = product_model["Exclusions & Forms"]
+                
                 while exclusion_index <= num_exclusion_rows - 1:
                     print_coverages(sheet, exclusions_and_forms_row)
-
+                    
                     #Check if this coverage has a form
                     if cov_name in exclusions and exclusion_index < num_exclusion_rows:
                         print_forms(sheet, exclusions_and_forms_row, exclusion_index, "Exclusion")
@@ -516,7 +583,8 @@ class ExcelLoaderApp:
 
             if num_condition_rows > 0:
                 condition_index = 0
-                sheet = product_model["Conditions & Forms"]    
+                sheet = product_model["Conditions & Forms"]
+                
                 while condition_index <= num_condition_rows - 1:
                     print_coverages(sheet, conditions_and_forms_row)
 
@@ -526,7 +594,7 @@ class ExcelLoaderApp:
 
                     condition_index+=1
                     conditions_and_forms_row+=1
-
+        
         #Hashtable for child description->child option states
         covterm_options_states = defaultdict(set)
 
@@ -622,7 +690,7 @@ class ExcelLoaderApp:
                         coverage_term_options_sheet[child_states2] = "All states except: " + ','.join(difference)
                     
                     coverage_terms_options_row+=1
-
+            
         #product_model.save("C:\\Users\\rvalli001\\Desktop\\WRB\\Coverages\\GL\\PC - SSP - GL Product Model & Forms Inference_Draft.xlsx")
         product_model.save(self.template)
 
