@@ -138,6 +138,102 @@ class ExcelLoaderApp:
     def process_files(self):
         self.set_lob()
 
+        def print_common_coverages(sheet, row):
+            #Print OU and UW
+            cell5 = "H" + str(row)
+            cell6 = "I" + str(row)
+
+            #Scenario 4
+            if cov_name not in ou_and_uw_exclusions:
+                sheet[cell5] = "All"
+                sheet[cell6] = "All"
+            else:
+                null_operating_unit = 0
+                null_underwriting_company = 0
+                ou_exception = set()
+                uw_exception = set()
+
+                for pair in ou_and_uw_exclusions[cov_name]:
+                    if not pd.isna(pair[0]) and not pd.isna(pair[1]):
+                        if pair[0].rstrip() in ou_abbreviations:
+                            ou_exception.add(pair[0].rstrip())
+                            uw_exception.add(pair[1] + "(" + ou_abbreviations[pair[0].rstrip()] + ")")
+                        continue
+                    
+                    if pd.isna(pair[0]):
+                        null_operating_unit+=1
+                    else:
+                        if pair[0].rstrip() in ou_abbreviations:
+                            ou_exception.add(ou_abbreviations[pair[0].rstrip()])
+
+                    if pd.isna(pair[1]):
+                        null_underwriting_company+=1
+                    else:
+                        uw_exception.add(pair[1])
+
+                #Scenario 2
+                if null_operating_unit == len(ou_and_uw_exclusions[cov_name]) and null_underwriting_company == 0:
+                    sheet[cell5] = "All"
+                    sheet[cell6] = "All except " + ', '.join(uw_exception)
+                #Scenario 3
+                elif null_operating_unit == 0 and null_underwriting_company == len(ou_and_uw_exclusions[cov_name]):
+                    sheet[cell5] = "All except " + ', '.join(ou_exception)
+                    sheet[cell6] = "All"
+                #Scenario 1
+                else:
+                    sheet[cell5] = "All except " + ', '.join(ou_exception)
+                    sheet[cell6] = "All except " + ', '.join(uw_exception)
+
+            if self.lob == "GL":
+                #Populate Subline C items
+                code = subline[cov_name]
+
+                if code == '          ':
+                    pass
+                elif code == 334 or code == 336:
+                    cell15 = "R" + str(row)
+                    cell16 = "S" + str(row)
+                    sheet[cell15] = "L"
+                    sheet[cell16] = "M"
+                elif code == 332:
+                    cell15 = "J" + str(row)
+                    cell16 = "K" + str(row)
+                    sheet[cell15] = "x"
+                    sheet[cell16] = "x"
+                else:
+                    pass
+
+        def print_common_forms(sheet, row, index):
+            form_number = common_forms[cov_name][index][0]
+            form_name = common_forms[cov_name][index][1]
+            form_edition = common_forms[cov_name][index][2].replace('/'," ")
+            form_pattern = form_number.replace(" ","") + form_edition.replace(" ","")
+
+            cell0 = "C" + str(row)
+            sheet[cell0] = form_pattern
+
+            cell1 = "D" + str(row)
+            sheet[cell1] = form_number
+
+            cell2 = "E" + str(row)
+            sheet[cell2] = form_edition
+
+            cell3 = "F" + str(row)
+            sheet[cell3] = form_name
+
+            cell4 = "G" + str(row)
+
+            state_set = set(form_states[form_number, form_edition.replace(" ","/")])
+
+            if len(state_set) == len(US_states) or "A1" in state_set:
+                sheet[cell4] = "All States"
+            elif len(state_set) <= 10:
+                sheet[cell4] = ','.join(state_set)
+            else:
+                difference = US_states.difference(state_set)
+                sheet[cell4] = "All states except: " + ','.join(difference)
+
+
         def print_coverages(sheet, row):
             #Populate files used
             cell22 = "D" + str(row)
@@ -456,6 +552,9 @@ class ExcelLoaderApp:
         #Hashtable for conditions
         conditions = defaultdict()
 
+        #Hashtable for common forms
+        common_forms = defaultdict()
+
         for index, row in self.Coverages.iterrows():
             #Child / Covterm
             if row["COVERAGE_ID"] != row["PARENT_COVERAGE_ID"]:
@@ -506,31 +605,58 @@ class ExcelLoaderApp:
             for form in parent_forms[cov][:]:
                 form_pattern = form[0].replace(" ","") + form[2].replace('/'," ").replace(" ","")
 
+                #If the word 'Exclusion' is in the form name
                 if "Exclusion" in form[1]:
+                    #If the coverage isn't already in the hashtable as a key, add it now
                     if cov not in exclusions:
                         exclusions[cov] = []
 
+                    #Add form to exclusions dictionary and remove it from the parent form dictionary so that it only prints in the 'Exclusions & Forms' tab
                     exclusions[cov].append(form)
                     parent_forms[cov].remove(form)
 
                 elif form_pattern in sbt.keys() and form_pattern in sbt_type.keys():
+                    #Check the last 4 characters in the 'Type' column within SBT extract
                     suffix = sbt_type[form_pattern][-4:]
 
+                    #If the last 4 characters are 'Excl' it's an exclusion
                     if suffix == "Excl":
+                        #If the coverage isn't already in the hashtable as a key, add it now
                         if cov not in exclusions:
                             exclusions[cov] = []
 
+                        #Add form to exclusions dictionary and remove it from the parent form dictionary so that it only prints in the 'Exclusions & Forms' tab
                         exclusions[cov].append(form)
                         parent_forms[cov].remove(form)
-                    elif suffix == "Cond":
+
+                    #If the last 4 characters are 'Cond' it is a condition
+                    if suffix == "Cond":
+                        #If the coverage isn't already in the hashtable as a key, add it now
                         if cov not in conditions:
                             conditions[cov] = []
-
+                        
+                        #Add form to conditions dictionary and remove it from the parent form dictionary so that it only prints in the 'Conditions & Forms' tab
                         conditions[cov].append(form)
                         parent_forms[cov].remove(form)
-                    else:
-                        pass
-
+                    
+                elif self.lob == "GL" and (form_pattern[:2] != "CG" or (form_pattern[:2] == "CG" and not form_pattern[2:4].isnumeric())):
+                        #If the coverage isn't already in the hashtable as a key, add it now
+                        if cov not in common_forms:
+                            common_forms[cov] = []
+                        
+                        #Add form to conditions dictionary and remove it from the parent form dictionary so that it only prints in the 'Common Forms' tab
+                        common_forms[cov].append(form)
+                        parent_forms[cov].remove(form)
+                
+                elif self.lob == "CP" and (form_pattern[:2] != "CP" or (form_pattern[:2] == "CP" and not form_pattern[2:4].isnumeric())):
+                        #If the coverage isn't already in the hashtable as a key, add it now
+                        if cov not in common_forms:
+                            common_forms[cov] = []
+                        
+                        #Add form to conditions dictionary and remove it from the parent form dictionary so that it only prints in the 'Common Forms' tab
+                        common_forms[cov].append(form)
+                        parent_forms[cov].remove(form)
+                
                 else:
                     pass
 
@@ -538,11 +664,13 @@ class ExcelLoaderApp:
         coverages_and_forms_row = 3
         exclusions_and_forms_row = 3
         conditions_and_forms_row = 3
+        common_forms_row = 3
         
         for cov_name in coverage.values():
             num_coverage_rows = 0
             num_condition_rows = 0
             num_exclusion_rows = 0
+            num_common_forms_row = 0
 
             if cov_name in parent_forms:
                 num_coverage_rows = len(parent_forms[cov_name])
@@ -550,7 +678,9 @@ class ExcelLoaderApp:
                 num_exclusion_rows = len(exclusions[cov_name])
             if cov_name in conditions:
                 num_condition_rows = len(conditions[cov_name])
-            if num_coverage_rows == 0 and num_exclusion_rows == 0 and num_condition_rows == 0:
+            if cov_name in common_forms:
+                num_common_forms_row = len(common_forms[cov_name])
+            if num_coverage_rows == 0 and num_exclusion_rows == 0 and num_condition_rows == 0 and num_common_forms_row == 0:
                 num_coverage_rows = 1
 
             if num_coverage_rows > 0:
@@ -594,6 +724,20 @@ class ExcelLoaderApp:
 
                     condition_index+=1
                     conditions_and_forms_row+=1
+
+            if num_common_forms_row > 0:
+                common_form_index = 0
+                sheet = product_model["Common Forms"]
+                
+                while common_form_index <= num_common_forms_row - 1:
+                    print_common_coverages(sheet, common_forms_row)
+
+                    #Check if this coverage has a form
+                    if cov_name in common_forms and common_form_index < num_common_forms_row:
+                        print_common_forms(sheet, common_forms_row, common_form_index)
+
+                    common_form_index+=1
+                    common_forms_row+=1
         
         #Hashtable for child description->child option states
         covterm_options_states = defaultdict(set)
@@ -624,6 +768,14 @@ class ExcelLoaderApp:
 
         for parent in parent_child.keys():
             for child in parent_child[parent]:
+                #Populate date
+                current_date = "C" + str(coverage_terms_row)
+                coverage_terms_sheet[current_date] = self.today
+
+                #Populate files used
+                #files_used = "D" + str(coverage_terms_row)
+                #sheet[files_used] =
+
                 #Populate coverage terms sheet
                 cov_term_parent_output = "G" + str(coverage_terms_row)
                 cov_term_child_output = "H" + str(coverage_terms_row)
@@ -673,6 +825,10 @@ class ExcelLoaderApp:
                     covterm_options_parent_output = "G" + str(coverage_terms_options_row)
                     covterm_options_child_output = "H" + str(coverage_terms_options_row)   
                     option_name = "J" + str(coverage_terms_options_row)
+
+                    #Populate current date
+                    current_date = "C" + str(coverage_terms_options_row)
+                    coverage_term_options_sheet[current_date] = self.today
 
                     coverage_term_options_sheet[covterm_options_parent_output] = parent
                     coverage_term_options_sheet[covterm_options_child_output] = child
