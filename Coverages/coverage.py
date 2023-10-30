@@ -123,6 +123,10 @@ class ExcelLoaderApp:
             self.SBT_model = self.SBT_model[["ClausePatternCode", "Description", "Type", "Existence", "Category", "Form_ID"]]
             self.SBT_model.drop_duplicates(inplace=True)
 
+            self.SBT_model_states = pd.read_excel(io=filepath, sheet_name = "Clause Availability", usecols = "A, C")
+            self.SBT_model_states = self.SBT_model_states.dropna()
+            self.SBT_model_states = self.SBT_model_states.groupby("ClausePatternCode")["Jurisdiction"].apply(lambda x: x.values.tolist()).to_dict()
+            
             self.SBT_model_covterms = pd.read_excel(io=filepath, sheet_name = "CovTerms", usecols = "A:B, D, F")
             self.SBT_model_covterms = self.SBT_model_covterms.groupby("ClausePatternCode")[["CovTermPatternCode","Required", "Default"]].apply(lambda x: x.values.tolist()).to_dict()
 
@@ -613,7 +617,14 @@ class ExcelLoaderApp:
                 else:
                     cell21 = "Z" + str(row)
 
-                state_set = set(form_states[cov_code[0], cov_code[1], cov_code[2], form_number, form_edition.replace(" ","/")])
+                state_set = {}
+                
+                if form_pattern in sbt:
+                    if sbt[form_pattern] in sbt_coverage_to_clause and sbt_coverage_to_clause[sbt[form_pattern]] in self.SBT_model_states:
+                        state_set = self.SBT_model_states[sbt_coverage_to_clause[sbt[form_pattern]]]
+                    
+                else:
+                    state_set = set(form_states[cov_code[0], cov_code[1], cov_code[2], form_number, form_edition.replace(" ","/")])
 
                 if len(state_set) == len(US_states) or "A1" in state_set:
                     sheet[cell21] = "All States"
@@ -797,7 +808,6 @@ class ExcelLoaderApp:
                 #Child / Covterm
                 if row["COVERAGE_ID"] != row["PARENT_COVERAGE_ID"]:
                     child_scheduled[row["COVERAGE_CODE"].rstrip()] = row["SCHD_COVERAGE_F"]
-                    covterm_states[row["COVERAGE_CODE"].rstrip()].add(row["STATE_CODE"])
 
                 #Parent
                 else:
@@ -850,12 +860,16 @@ class ExcelLoaderApp:
 
             covterms[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip()].add(row["LIMIT_DED_OCCUR_C"].rstrip())
             covterm_term_value_type[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip()].add(row["LIMIT_DED_OPTION"].rstrip())
+            covterm_states[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip(), row["LIMIT_DED_OPTION"].rstrip()].add(row["STATE_CODE"])
 
             if row["DEFAULT_FLAG"] == "Y":
                 covterm_default_value[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip()] = row["LIMIT_DED_DESC"]
 
             covterm_options_states[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip()].add(row["STATE_CODE"])
             covterm_options_list[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip()].add(row["LIMIT_DED_DESC"])
+
+        sample = self.Limits.groupby(['COVERAGE_CODE', 'PROGRAM_NAME', 'ENTITY_CODE', 'LIMIT_DED_OCCUR_C', 'LIMIT_DED_OPTION'])['STATE_CODE'].apply(lambda x: x.values.tolist()).reset_index()
+        sample = sample.groupby(['COVERAGE_CODE', 'PROGRAM_NAME', 'ENTITY_CODE', 'LIMIT_DED_OCCUR_C'])[['LIMIT_DED_OPTION','STATE_CODE']].apply(lambda x: x.set_index('LIMIT_DED_OPTION').to_dict(orient='index')).to_dict()
 
         #Gather exclusions, conditions and common forms
         for cov in coverage:
@@ -1056,55 +1070,39 @@ class ExcelLoaderApp:
         option_term = ['DROPDOWN', 'DEFAULT_DD', 'FILTER_DD', 'LABEL_DD']
 
         for coverage_code in covterms:
-            items = None
+            items = {}
 
-            if coverage_code in sbt_parent_coverages and sbt_parent_coverages[coverage_code] in sbt_coverage_to_clause and sbt_coverage_to_clause[sbt_parent_coverages[coverage_code]] in self.SBT_model_covterms:
-                clause_pattern = sbt_coverage_to_clause[sbt_parent_coverages[coverage_code]]
-                items = self.SBT_model_covterms[clause_pattern]
+            if coverage_code in sbt_parent_coverages:
+                if sbt_parent_coverages[coverage_code] in sbt_coverage_to_clause and sbt_coverage_to_clause[sbt_parent_coverages[coverage_code]] in self.SBT_model_covterms:
+                    clause_pattern = sbt_coverage_to_clause[sbt_parent_coverages[coverage_code]]
+                    items = self.SBT_model_covterms[clause_pattern]
             else:
                 items = covterms[coverage_code]
 
             for covterm in items:
                 option_list = {}
 
-                cov_term_parent_coverage = "G" + str(coverage_terms_row)
-                cov_term_name = "H" + str(coverage_terms_row)
-
-                #Populate date
-                current_date = "C" + str(coverage_terms_row)
-                coverage_terms_sheet[current_date] = self.today
-
-                #Populate files used
-                files_used = "D" + str(coverage_terms_row)
-                coverage_terms_sheet[files_used] = self.loaded_files[7]
-
-                #Populate last updated by
-                last_updated = "E" + str(coverage_terms_row)
-                coverage_terms_sheet[last_updated] = "Automation Script"
-
-                #Populate SBT/OOTB, New, Modified
-                sbt_or_new = "F" + str(coverage_terms_row)
-
-                #Populate program
-                covterm_program = "I" + str(coverage_terms_row)
-                coverage_terms_sheet[covterm_program] = coverage_code[1]
-
-                covterm_category = "J" + str(coverage_terms_row)
-                term_type = "K" + str(coverage_terms_row)
-                value_type = "L" + str(coverage_terms_row)
-                required = "M" + str(coverage_terms_row)
-                default_value = "N" + str(coverage_terms_row)
-                child_states = "O" + str(coverage_terms_row)
-
                 if coverage_code in sbt_parent_coverages:
+                    #Populate date
+                    coverage_terms_sheet["C" + str(coverage_terms_row)] = self.today
+
+                    #Populate files used
+                    coverage_terms_sheet["D" + str(coverage_terms_row)] = self.loaded_files[7]
+
+                    #Populate last updated by
+                    coverage_terms_sheet["E" + str(coverage_terms_row)] = "Automation Script"
+
                     #Populate coverage name from SBT
-                    coverage_terms_sheet[cov_term_parent_coverage] = sbt_parent_coverages[coverage_code]
+                    coverage_terms_sheet["G" + str(coverage_terms_row)] = sbt_parent_coverages[coverage_code]
 
                     #Populate SBT
-                    coverage_terms_sheet[sbt_or_new] = "SBT"
+                    coverage_terms_sheet["F" + str(coverage_terms_row)] = "SBT"
 
                     #Populate covterm name from SBT
-                    coverage_terms_sheet[cov_term_name] = covterm[0]
+                    coverage_terms_sheet["H" + str(coverage_terms_row)] = covterm[0]
+
+                    #Populate program
+                    coverage_terms_sheet["I" + str(coverage_terms_row)] = coverage_code[1]
 
                     #Populate category
                     if clause_pattern in sbt_clause_to_category:
@@ -1131,38 +1129,38 @@ class ExcelLoaderApp:
                         else:
                             pass
 
-                        coverage_terms_sheet[covterm_category] = category_value
+                        coverage_terms_sheet["J" + str(coverage_terms_row)] = category_value
                     
                     else:
-                        coverage_terms_sheet[covterm_category] = coverage_code[2]
+                        coverage_terms_sheet["J" + str(coverage_terms_row)] = coverage_code[2]
                     
                     #Populate term type and value type
-                    coverage_terms_sheet[term_type] = "SBT"
-                    coverage_terms_sheet[value_type] = "SBT"
+                    coverage_terms_sheet["K" + str(coverage_terms_row)] = "SBT"
+                    coverage_terms_sheet["L" + str(coverage_terms_row)] = "SBT"
 
                     #Populate required value
                     if covterm[1] == True:
-                        coverage_terms_sheet[required] = "Yes"
+                        coverage_terms_sheet["M" + str(coverage_terms_row)] = "Yes"
                     if covterm[1] == False:
-                        coverage_terms_sheet[required] = "No"
+                        coverage_terms_sheet["M" + str(coverage_terms_row)] = "No"
                     
                     #Populate default value
                     if pd.isna(covterm[2]):
-                        coverage_terms_sheet[default_value] = "<blank>"
+                        coverage_terms_sheet["N" + str(coverage_terms_row)] = "<blank>"
                     else:
-                        coverage_terms_sheet[default_value] = covterm[2]
+                        coverage_terms_sheet["N" + str(coverage_terms_row)] = covterm[2]
 
                     #Populate states
                     if (clause_pattern, covterm[0]) in self.SBT_model_covterm_states:
                         states = set(self.SBT_model_covterm_states[clause_pattern, covterm[0]])
                         
                         if len(states) == len(US_states) or "A1" in states:
-                            coverage_terms_sheet[child_states] = "All States"
+                            coverage_terms_sheet["O" + str(coverage_terms_row)] = "All States"
                         elif len(states) <= 10:
-                            coverage_terms_sheet[child_states] = ','.join(states)
+                            coverage_terms_sheet["O" + str(coverage_terms_row)] = ','.join(states)
                         else:
                             difference = US_states.difference(states)
-                            coverage_terms_sheet[child_states] = "All states except: " + ','.join(difference)
+                            coverage_terms_sheet["O" + str(coverage_terms_row)] = "All states except: " + ','.join(difference)
 
                     if (clause_pattern, covterm[0]) in self.SBT_model_covterm_options:
                         option_list = self.SBT_model_covterm_options[clause_pattern, covterm[0]]
@@ -1170,71 +1168,79 @@ class ExcelLoaderApp:
                     coverage_terms_row+=1
                     
                 else:
-                    #It's a parent
-                    if coverage_code in coverage:
-                        #Populate coverage name
-                        coverage_terms_sheet[cov_term_parent_coverage] = coverage[coverage_code]
-                        
-                        #Populate coverage term name
-                        if "LIMIT" in covterm:
-                            coverage_terms_sheet[cov_term_name] = "Limit"
-                        else:
-                            coverage_terms_sheet[cov_term_name] = "Deductible"
-
-                    #It's a child
-                    if coverage_code in limit_children:
-                        if coverage_code in limit_child_parent and limit_child_parent[coverage_code] in parent_coverage:
+                    for term in covterm_term_value_type[coverage_code[0], coverage_code[1], coverage_code[2], covterm]:
+                        #It's a parent
+                        if coverage_code in coverage:
                             #Populate coverage name
-                            coverage_terms_sheet[cov_term_parent_coverage] = coverage[parent_coverage[limit_child_parent[coverage_code]]]
+                            coverage_terms_sheet["G" + str(coverage_terms_row)] = coverage[coverage_code]
+                            
+                            #Populate coverage term name
+                            if "LIMIT" in covterm:
+                                coverage_terms_sheet["H" + str(coverage_terms_row)] = "Limit"
+                            else:
+                                coverage_terms_sheet["H" + str(coverage_terms_row)] = "Deductible"
+
+                        #It's a child
+                        if coverage_code in limit_children:
+                            if coverage_code in limit_child_parent and limit_child_parent[coverage_code] in parent_coverage:
+                                #Populate coverage name
+                                coverage_terms_sheet["G" + str(coverage_terms_row)] = coverage[parent_coverage[limit_child_parent[coverage_code]]]
+                            
+                            #Populate coverage term name
+                            if "LIMIT" in covterm:
+                                coverage_terms_sheet["H" + str(coverage_terms_row)] = limit_children[coverage_code] + " - Limit"
+                            if "DEDUCT" in covterm:
+                                coverage_terms_sheet["H" + str(coverage_terms_row)] = limit_children[coverage_code] + " - Deductible"
+
+                        if coverage_code in coverage or coverage_code in limit_children:
+                            #Populate date
+                            coverage_terms_sheet["C" + str(coverage_terms_row)] = self.today
+
+                            #Populate files used
+                            coverage_terms_sheet["D" + str(coverage_terms_row)] = self.loaded_files[7]
+
+                            #Populate last updated by
+                            coverage_terms_sheet["E" + str(coverage_terms_row)] = "Automation Script"
+
+                            #Populate SBT/New
+                            coverage_terms_sheet["F" + str(coverage_terms_row)] = "New"
                         
-                        #Populate coverage term name
-                        if "LIMIT" in covterm:
-                            coverage_terms_sheet[cov_term_name] = limit_children[coverage_code] + " - Limit"
-                        if "DEDUCT" in covterm:
-                            coverage_terms_sheet[cov_term_name] = limit_children[coverage_code] + " - Deductible"
+                            #Populate program
+                            coverage_terms_sheet["I" + str(coverage_terms_row)] = coverage_code[1]
 
-                    if coverage_code in coverage or coverage_code in limit_children:
-                        #Populate SBT/New
-                        coverage_terms_sheet[sbt_or_new] = "New"
-                    
-                        #Populate program
-                        coverage_terms_sheet[covterm_program] = coverage_code[1]
+                            #Populate category
+                            coverage_terms_sheet["J" + str(coverage_terms_row)] = coverage_code[2]
+                            
+                            #Populate term type and value type
+                            if term in direct_term:
+                                coverage_terms_sheet["K" + str(coverage_terms_row)] = "Direct"
+                                coverage_terms_sheet["L" + str(coverage_terms_row)] = "Other"
+                            if term in option_term:
+                                coverage_terms_sheet["K" + str(coverage_terms_row)] = "Option"
+                                coverage_terms_sheet["L" + str(coverage_terms_row)] = "Other"
 
-                        #Populate category
-                        coverage_terms_sheet[covterm_category] = coverage_code[2]
+                            #Populate default value
+                            if (coverage_code[0], coverage_code[1], coverage_code[2], covterm) in covterm_default_value:
+                                coverage_terms_sheet["N" + str(coverage_terms_row)] = covterm_default_value[coverage_code[0], coverage_code[1], coverage_code[2], covterm]
+                            else:
+                                coverage_terms_sheet["N" + str(coverage_terms_row)] = "<blank>"
+
+                            #Populate states
+                            states = covterm_states[coverage_code[0], coverage_code[1], coverage_code[2], covterm, term]
                         
-                        #Populate term type and value type
-                        term = covterm_term_value_type[coverage_code[0], coverage_code[1], coverage_code[2], covterm]
+                            if len(states) == len(US_states) or "A1" in states:
+                                coverage_terms_sheet["O" + str(coverage_terms_row)] = "All States"
+                            elif len(states) <= 10:
+                                coverage_terms_sheet["O" + str(coverage_terms_row)] = ','.join(states)
+                            else:
+                                difference = US_states.difference(states)
+                                coverage_terms_sheet["O" + str(coverage_terms_row)] = "All states except: " + ','.join(difference)
 
-                        if set(term).issubset(direct_term):
-                            coverage_terms_sheet[term_type] = "Direct"
-                            coverage_terms_sheet[value_type] = "Other"
-                        if set(term).issubset(option_term):
-                            coverage_terms_sheet[term_type] = "Option"
-                            coverage_terms_sheet[value_type] = "Other"
+                            if (coverage_code[0], coverage_code[1], coverage_code[2], covterm) in covterm_options_list:
+                                option_list = list(covterm_options_list[coverage_code[0], coverage_code[1], coverage_code[2], covterm])
+                                option_list = [a for a in option_list if str(a) != 'nan']
 
-                        #Populate default value
-                        if (coverage_code[0], coverage_code[1], coverage_code[2], covterm) in covterm_default_value:
-                            coverage_terms_sheet[default_value] = covterm_default_value[coverage_code[0], coverage_code[1], coverage_code[2], covterm]
-                        else:
-                            coverage_terms_sheet[default_value] = "<blank>"
-
-                        #Populate states
-                        states = covterm_options_states[coverage_code[0], coverage_code[1], coverage_code[2], covterm]
-                    
-                        if len(states) == len(US_states) or "A1" in states:
-                            coverage_terms_sheet[child_states] = "All States"
-                        elif len(states) <= 10:
-                            coverage_terms_sheet[child_states] = ','.join(states)
-                        else:
-                            difference = US_states.difference(states)
-                            coverage_terms_sheet[child_states] = "All states except: " + ','.join(difference)
-
-                        if (coverage_code[0], coverage_code[1], coverage_code[2], covterm) in covterm_options_list:
-                            option_list = list(covterm_options_list[coverage_code[0], coverage_code[1], coverage_code[2], covterm])
-                            option_list = [a for a in option_list if str(a) != 'nan']
-
-                        coverage_terms_row+=1
+                            coverage_terms_row+=1
 
                 option_counter = 0
 
@@ -1250,19 +1256,19 @@ class ExcelLoaderApp:
                     coverage_term_options_sheet[last_updated2] = "Automation Script"
 
                     sbt_or_new_2 = "F" + str(coverage_terms_options_row)
-                    coverage_term_options_sheet[sbt_or_new_2] = coverage_terms_sheet[sbt_or_new].value
+                    coverage_term_options_sheet[sbt_or_new_2] = coverage_terms_sheet["F" + str(coverage_terms_row - 1)].value
 
                     covterm_options_parent_output = "G" + str(coverage_terms_options_row)
-                    coverage_term_options_sheet[covterm_options_parent_output] = coverage_terms_sheet[cov_term_parent_coverage].value
+                    coverage_term_options_sheet[covterm_options_parent_output] = coverage_terms_sheet["G" + str(coverage_terms_row - 1)].value
 
                     covterm_options_child_output = "H" + str(coverage_terms_options_row)
-                    coverage_term_options_sheet[covterm_options_child_output] = coverage_terms_sheet[cov_term_name].value
+                    coverage_term_options_sheet[covterm_options_child_output] = coverage_terms_sheet["H" + str(coverage_terms_row - 1)].value
 
                     covterm_program2 = "I" + str(coverage_terms_options_row)
-                    coverage_term_options_sheet[covterm_program2] = coverage_terms_sheet[covterm_program].value
+                    coverage_term_options_sheet[covterm_program2] = coverage_terms_sheet["I" + str(coverage_terms_row - 1)].value
 
                     covterm_category2 = "J" + str(coverage_terms_options_row)
-                    coverage_term_options_sheet[covterm_category2] = coverage_terms_sheet[covterm_category].value
+                    coverage_term_options_sheet[covterm_category2] = coverage_terms_sheet["J" + str(coverage_terms_row - 1)].value
 
                     option_name = "L" + str(coverage_terms_options_row)
                     coverage_term_options_sheet[option_name] = option_list[option_counter]
@@ -1281,7 +1287,7 @@ class ExcelLoaderApp:
                                 difference = US_states.difference(states2)
                                 coverage_terms_sheet[child_states2] = "All states except: " + ','.join(difference)
                     else:
-                        coverage_term_options_sheet[child_states2] = coverage_terms_sheet[child_states].value
+                        coverage_term_options_sheet[child_states2] = ','.join(covterm_options_states[coverage_code[0], coverage_code[1], coverage_code[2], covterm])
                     
                     coverage_terms_options_row+=1
                     option_counter+=1  
