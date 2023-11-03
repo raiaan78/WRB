@@ -1,3 +1,4 @@
+import itertools
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -12,18 +13,20 @@ class ExcelLoaderApp:
         self.root.title('ProductModel WRB Accelerator')
         
         # Dataframes for each file type
-        self.Coverages = None
-        self.Forms = None
-        self.Inference = None
-        self.Transaction_types = None
-        self.Limits = None
-        self.SBT_model = None
-        self.SBT_model_covterms = None
-        self.SBT_model_covterm_options = None
-        self.SBT_model_covterm_states = None
-        self.SBT_model_covterm_options_states = None
-        self.Exclusions = None
-        self.Prod_Coverages = None
+        self.Coverages = {}
+        self.Forms = {}
+        self.Inference = {}
+        self.QRG_inference = {}
+        self.Transaction_types = {}
+        self.Limits = {}
+        self.QRG_forms = {}
+        self.SBT_model = {}
+        self.SBT_model_covterms = {}
+        self.SBT_model_covterm_options = {}
+        self.SBT_model_covterm_states = {}
+        self.SBT_model_covterm_options_states = {}
+        self.Exclusions = {}
+        self.Prod_Coverages = {}
         self.today = date.today()
         self.files_used = ""
 
@@ -65,7 +68,7 @@ class ExcelLoaderApp:
         self.input_template_btn = tk.Button(self.root, text='Load Template File', command=lambda: self.load_file('input_template'))
         self.input_template_btn.pack(pady=10)
 
-        options = ["GL","CP","CA"]
+        options = ["GL","CP","CA","IM"]
         self.clicked = tk.StringVar(self.root)
         self.clicked.set("Select your line of business")
         self.option = tk.OptionMenu(self.root, self.clicked, *options)
@@ -107,11 +110,13 @@ class ExcelLoaderApp:
 
         if file_type == 'coverage' and "CPU" in filename:
             self.Coverages = pd.read_excel(io=filepath, usecols = "A, C:G, J, S:T, X, Y, AM, BA")
+            self.Coverages = self.Coverages.dropna(subset=['ENTITY_C'])
             self.coverage_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
         elif file_type == 'forms' and "Forms To Coverages" in filename:
             self.Forms = pd.read_excel(io=filepath, usecols = "A:C, F, H:K, AB")
+            self.Forms = self.Forms.dropna(subset=['COVERAGE_CODE'])
             self.forms_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
@@ -125,6 +130,29 @@ class ExcelLoaderApp:
             self.Transaction_types = pd.read_excel(io=filepath, usecols = "B, H, I")
             self.Transaction_types = self.Transaction_types[~self.Transaction_types['PROGRAM_NAME'].str.contains("FPP")]
             self.Transaction_types.drop_duplicates(inplace=True)
+
+            self.QRG_forms = pd.read_excel(io=filepath, usecols = "B:D, H:J")
+            self.QRG_forms['Form Edition'] = self.QRG_forms['Form Edition'].dt.strftime('%m/%y')
+            self.QRG_forms = self.QRG_forms.groupby(['Form Number', 'Form Title', 'Form Edition','PROGRAM_NAME','RENEWAL_ACTION_C'])['STATE_CODE'].apply(lambda x: x.values.tolist()).reset_index()
+
+            self.QRG_transactions = self.QRG_forms[['Form Number', 'Form Title', 'Form Edition', 'RENEWAL_ACTION_C']]
+            self.QRG_transactions['RENEWAL_ACTION_C'] = self.QRG_transactions['RENEWAL_ACTION_C'].apply(lambda x: x.rstrip())
+            self.QRG_transactions = self.QRG_transactions.set_index(['Form Number', 'Form Title', 'Form Edition']).to_dict()['RENEWAL_ACTION_C']
+            
+            result = {}  
+            for name, group in self.QRG_forms.groupby(['Form Number', 'Form Title', 'Form Edition']):  
+                result[name] = {}  
+                for program, state in group.groupby('PROGRAM_NAME')['STATE_CODE']:  
+                    result[name][program] = state.tolist()
+                    result[name][program] = list(itertools.chain.from_iterable(result[name][program]))   
+
+            self.QRG_forms = result
+
+            self.QRG_inference = pd.read_excel(io=filepath, usecols = "B:D, X")
+            self.QRG_inference['Form Edition'] = self.QRG_inference['Form Edition'].dt.strftime('%m/%y')
+            self.QRG_inference = self.QRG_inference.dropna(subset=['ROLL_ON_CND3_CODE'])
+            self.QRG_inference = self.QRG_inference.set_index(['Form Number', 'Form Title', 'Form Edition']).to_dict()['ROLL_ON_CND3_CODE']
+
             self.qrg_btn.config(state=tk.DISABLED)
             self.loaded_files.append(filename)
 
@@ -146,8 +174,8 @@ class ExcelLoaderApp:
             self.SBT_model_states = self.SBT_model_states.dropna()
             self.SBT_model_states = self.SBT_model_states.groupby("ClausePatternCode")["Jurisdiction"].apply(lambda x: x.values.tolist()).to_dict()
             
-            self.SBT_model_covterms = pd.read_excel(io=filepath, sheet_name = "CovTerms", usecols = "A:B, D, F")
-            self.SBT_model_covterms = self.SBT_model_covterms.groupby("ClausePatternCode")[["CovTermPatternCode","Required", "Default"]].apply(lambda x: x.values.tolist()).to_dict()
+            self.SBT_model_covterms = pd.read_excel(io=filepath, sheet_name = "CovTerms", usecols = "A:C, F, H")
+            self.SBT_model_covterms = self.SBT_model_covterms.groupby("ClausePatternCode")[["CovTermPatternCode","CovTerm Description","Required", "Default"]].apply(lambda x: x.values.tolist()).to_dict()
 
             self.SBT_model_covterm_options = pd.read_excel(io=filepath, sheet_name = "Options", usecols = "A:B, F")
             self.SBT_model_covterm_options = self.SBT_model_covterm_options.groupby(["ClausePatternCode", "CovTermPatternCode"])["Value"].apply(lambda x: x.values.tolist()).to_dict()
@@ -176,6 +204,7 @@ class ExcelLoaderApp:
         elif file_type == 'prod_coverage' and "PROD".casefold() in filename.casefold():
             self.Prod_Coverages = pd.read_excel(io=filepath, usecols="F, G, AS")
             self.Prod_Coverages['COVERAGE_CODE'] = self.Prod_Coverages['COVERAGE_CODE'].apply(lambda x: x.rstrip())
+            self.Prod_Coverages = self.Prod_Coverages.dropna(subset=['ENTITY_C'])
             self.Prod_Coverages['ENTITY_C'] = self.Prod_Coverages['ENTITY_C'].apply(lambda x: x.rstrip())
             self.Prod_Coverages.drop_duplicates(inplace=True)
             self.production_btn.config(state=tk.DISABLED)
@@ -188,11 +217,242 @@ class ExcelLoaderApp:
         self.loaded_label.config(text=', '.join(self.loaded_files))
 
         # Enable the process button if all files are loaded
-        if len(self.loaded_files) == 1:  # Assuming you have 8 files to load
+        if len(self.loaded_files) == 9:  # Assuming you have 9 files to load
             self.process_btn.config(state=tk.NORMAL)
 
     def process_files(self):
         self.set_lob()
+
+        def print_qrg_forms(sheet, row, form):
+            form_number = form[0]
+            form_name = form[1]
+            form_edition = form[2].replace('/'," ")
+            form_pattern = form_number.replace(" ","") + form_edition.replace(" ","")
+
+            for program in self.QRG_forms[form]:
+                #Updated By
+                cell0 = "C" + str(row)
+                sheet[cell0] = "Automation Script"
+
+                #ISO/Proprietary
+                cell1 = "D" + str(row)
+
+                if self.lob == "GL":
+                    if (form_pattern[:2] == "CG" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                        sheet[cell1] = "Proprietary"
+                    else:
+                        sheet[cell1] = "ISO"
+
+                if self.lob == "CP":
+                    if (form_pattern[:2] == "CP" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                        sheet[cell1] = "Proprietary"
+                    else:
+                        sheet[cell1] = "ISO"
+
+                if self.lob == "CA":
+                    if (form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                        sheet[cell1] = "Proprietary"
+                    else:
+                        sheet[cell1] = "ISO"
+
+                if self.lob == "IM":
+                    if (form_pattern[:2] == "IM" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                        sheet[cell1] = "Proprietary"
+                    else:
+                        sheet[cell1] = "ISO"
+
+                cell2 = "E" + str(row)
+                sheet[cell2] = form_pattern
+
+                cell3 = "F" + str(row)
+                sheet[cell3] = form_number
+
+                cell4 = "G" + str(row)
+                sheet[cell4] = form_edition
+
+                cell5 = "H" + str(row)
+                sheet[cell5] = form_name
+
+                cell6 = "I" + str(row)
+
+                state_set = set(self.QRG_forms[form][program])
+
+                if len(state_set) == len(US_states) or "A1" in state_set:
+                    sheet[cell6] = "All States"
+                elif len(state_set) <= 10:
+                    sheet[cell6] = ','.join(state_set)
+                else:
+                    difference = US_states.difference(state_set)
+                    sheet[cell6] = "All states except: " + ','.join(difference)
+
+                cell7 = "J" + str(row)
+                sheet[cell7] = program
+
+                #Populate Transaction Types
+                cell8 = "O" + str(row)
+
+                if form in self.QRG_transactions:
+                    if self.QRG_transactions[form] == "RETAIN":
+                        sheet[cell8] = "Submission, Policy, Change, Rewrite, Rewrite New Account, Renewal"
+                    else:
+                        sheet[cell8] = "Submission, Policy, Change, Rewrite, Rewrite New Account"
+
+                if form in self.QRG_inference and self.QRG_inference[form] in self.Inference:
+                    if sheet != product_model["State Amendatory Endorsements"] and sheet != product_model["Common Forms"]:
+                        cell28 = "AC" + str(row)
+                    else:
+                        cell28 = "N" + str(row)
+                    
+                    sheet[cell28] = self.Inference[self.QRG_inference[form]]
+                
+                row+=1
+
+            return row
+
+        def print_qrg_sbt_forms(sheet, row, form):
+            form_number = form[0]
+            form_name = form[1]
+            form_edition = form[2].replace('/'," ")
+            form_pattern = form_number.replace(" ","") + form_edition.replace(" ","")
+
+            category_idx = 0
+            if form_pattern in sbt_form_to_category:
+                category_idx = len(sbt_form_to_category[form_pattern]) - 1
+            
+            for program in self.QRG_forms[form]:
+                while category_idx >= 0:
+                    if self.lob == "GL":
+                        cell15 = "AH" + str(row)
+                        cell16 = "AI" + str(row)
+                        cell17 = "AJ" + str(row)
+                        cell18 = "AK" + str(row)
+                    else:
+                        cell15 = "V" + str(row)
+                        cell16 = "W" + str(row)
+                        cell17 = "X" + str(row)
+                        cell18= "Y" + str(row)
+
+                    sheet[cell15] = form_pattern
+                    sheet[cell16] = form_number
+                    sheet[cell17] = form_edition
+                    sheet[cell18] = form_name
+
+                    #Populate SBT/OOTB
+                    cell19 = "H" + str(row)
+                    sheet[cell19] = "SBT"
+
+                    #Change coverage name to whatever is in the SBT model
+                    sheet["I" + str(row)] = sbt[form_pattern]
+
+                    #Change existence of coverage to whatever is in SBT model
+                    sheet["N" + str(row)] = sbt_eoc[form_pattern]
+                        
+                    #ISO/Proprietary
+                    cell20 = "J" + str(row)
+
+                    if self.lob == "GL":
+                        if (form_pattern[:2] == "CG" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                            sheet[cell20] = "Proprietary"
+                        else:
+                            sheet[cell20] = "ISO"
+
+                    if self.lob == "CP":
+                        if (form_pattern[:2] == "CP" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                            sheet[cell20] = "Proprietary"
+                        else:
+                            sheet[cell20] = "ISO"
+
+                    if self.lob == "CA":
+                        if (form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                            sheet[cell20] = "Proprietary"
+                        else:
+                            sheet[cell20] = "ISO"
+
+                    if self.lob == "IM":
+                        if (form_pattern[:2] == "IM" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                            sheet[cell20] = "Proprietary"
+                        else:
+                            sheet[cell20] = "ISO"
+
+                    #Populate form states
+                    if self.lob == "GL":
+                        cell21 = "AL" + str(row)
+                    else:
+                        cell21 = "Z" + str(row)
+
+                    state_set = set(self.QRG_forms[form][program])
+
+                    if len(state_set) == len(US_states) or "A1" in state_set:
+                        sheet[cell21] = "All States"
+                    elif len(state_set) <= 10:
+                        sheet[cell21] = ','.join(state_set)
+                    else:
+                        difference = US_states.difference(state_set)
+                        sheet[cell21] = "All states except: " + ','.join(difference)
+
+                    #Populate Transaction Types
+                    if self.lob == "GL":
+                        cell22 = "AP" + str(row)
+                    else:
+                        cell22 = "AD" + str(row)
+
+                    if self.QRG_transactions[form] == "RETAIN":
+                        sheet[cell22] = "Submission, Policy, Change, Rewrite, Rewrite New Account, Renewal"
+                    else:
+                        sheet[cell22] = "Submission, Policy, Change, Rewrite, Rewrite New Account"
+
+                    #Populate Category
+                    cell23 = "M" + str(row)
+                    if form_pattern in sbt_form_to_category:
+                        category_value = sbt_form_to_category[form_pattern][category_idx][3:]
+                        
+                        if "AddlGrp" in category_value:
+                            idx = category_value.find("AddlGrp")
+                            category_value = category_value[:idx] + " - Additional Coverage"
+                        elif "CondGrp" in category_value:
+                            idx = category_value.find("CondGrp")
+                            category_value = category_value[:idx] + " - Conditions"
+                        elif "ExclGrp" in category_value:
+                            idx = category_value.find("ExclGrp")
+                            category_value = category_value[:idx] + " - Exclusions"
+                        elif "StdGrp" in category_value:
+                            idx = category_value.find("StdGrp")
+                            category_value = category_value[:idx] + " - Coverages"
+                        elif "BlanketGrp" in category_value:
+                            idx = category_value.find("BlanketGrp")
+                            category_value = category_value[:idx] + " - Blanket Coverages"
+                        elif "AddlInsdGrp" in category_value:
+                            idx = category_value.find("AddlInsdGrp")
+                            category_value = category_value[:idx] + " - Additional Insured"
+                        else:
+                            pass
+
+                        sheet[cell23] = category_value
+
+                    cell24 = "C" + str(row)
+                    sheet[cell24] = self.today
+
+                    cell25 = "D" + str(row)
+                    sheet[cell25] = ', '.join(self.loaded_files[i] for i in [0, 5])
+
+                    cell26 = "E" + str(row)
+                    sheet[cell26] = "Automation Script"
+
+                    cell27 = "L" + str(row)
+                    sheet[cell27] = program
+
+                    if form in self.QRG_inference and self.QRG_inference[form] in self.Inference:
+                        if sheet != product_model["State Amendatory Endorsements"] and sheet != product_model["Common Forms"]:
+                            cell28 = "AC" + str(row)
+                        else:
+                            cell28 = "N" + str(row)
+                        
+                        sheet[cell28] = self.Inference[self.QRG_inference[form]]
+
+                    category_idx-=1
+                    row+=1
+            
+            return row
 
         def print_amendatory_coverages(sheet, row):
             #Print updated by
@@ -200,8 +460,8 @@ class ExcelLoaderApp:
             sheet[cell10] = "Automation Script"
 
             #Print OU and UW
-            cell8 = "J" + str(row)
-            cell9 = "K" + str(row)
+            cell8 = "K" + str(row)
+            cell9 = "L" + str(row)
 
             #Scenario 4
             if cov_code[0] not in ou_and_uw_exclusions:
@@ -213,7 +473,7 @@ class ExcelLoaderApp:
                 ou_exception = set()
                 uw_exception = set()
 
-                for pair in ou_and_uw_exclusions[cov_code]:
+                for pair in ou_and_uw_exclusions[cov_code[0]]:
                     if not pd.isna(pair[0]) and not pd.isna(pair[1]):
                         if pair[0].rstrip() in ou_abbreviations:
                             ou_exception.add(ou_abbreviations[pair[0].rstrip()])
@@ -271,6 +531,12 @@ class ExcelLoaderApp:
                 else:
                     sheet[cell0] = "ISO"
 
+            if self.lob == "IM":
+                if (form_pattern[:2] == "IM" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell0] = "Proprietary"
+                else:
+                    sheet[cell0] = "ISO"
+
             cell1 = "E" + str(row)
             sheet[cell1] = form_pattern
 
@@ -296,7 +562,7 @@ class ExcelLoaderApp:
                 sheet[cell5] = "All states except: " + ','.join(difference)
 
             #Populate Transaction Types
-            cell6 = "N" + str(row)
+            cell6 = "O" + str(row)
 
             if form_number in transactions:
                 if transactions[form_number] == "RETAIN":
@@ -306,9 +572,11 @@ class ExcelLoaderApp:
 
             #Populate Inference Logic
             if (cov_code[0], cov_code[1], cov_code[2], state_amendatory[cov_code][index][0], state_amendatory[cov_code][index][2]) in inference and inference[cov_code[0], cov_code[1], cov_code[2], state_amendatory[cov_code][index][0], state_amendatory[cov_code][index][2]] in self.Inference:
-                cell7 = "M" + str(row)
+                cell7 = "N" + str(row)
                 sheet[cell7] = self.Inference[inference[cov_code[0], cov_code[1], cov_code[2], state_amendatory[cov_code][index][0], state_amendatory[cov_code][index][2]]]
 
+            cell8 = "J" + str(row)
+            sheet[cell8] = cov_code[1]
 
         def print_common_coverages(sheet, row):
             #Print last updated by
@@ -316,8 +584,8 @@ class ExcelLoaderApp:
             sheet[cell7] = "Automation Script"
 
             #Print OU and UW
-            cell5 = "J" + str(row)
-            cell6 = "K" + str(row)
+            cell5 = "K" + str(row)
+            cell6 = "L" + str(row)
 
             #Scenario 4
             if cov_code[0] not in ou_and_uw_exclusions:
@@ -329,7 +597,7 @@ class ExcelLoaderApp:
                 ou_exception = set()
                 uw_exception = set()
 
-                for pair in ou_and_uw_exclusions[cov_code]:
+                for pair in ou_and_uw_exclusions[cov_code[0]]:
                     if not pd.isna(pair[0]) and not pd.isna(pair[1]):
                         if pair[0].rstrip() in ou_abbreviations:
                             ou_exception.add(ou_abbreviations[pair[0].rstrip()])
@@ -391,15 +659,45 @@ class ExcelLoaderApp:
                 sheet[cell4] = "All states except: " + ','.join(difference)
 
             if form_number in transactions:
-                cell5 = "N" + str(row)
+                cell5 = "O" + str(row)
                 if transactions[form_number] == "RETAIN":
                     sheet[cell5] = "Submission, Policy, Change, Rewrite, Rewrite New Account, Renewal"
                 else:
                     sheet[cell5] = "Submission, Policy, Change, Rewrite, Rewrite New Account"
 
             if (cov_code[0], cov_code[1], cov_code[2], common_forms[cov_code][index][0], common_forms[cov_code][index][2]) in inference and inference[cov_code[0], cov_code[1], cov_code[2], common_forms[cov_code][index][0], common_forms[cov_code][index][2]] in self.Inference:
-                cell6 = "M" + str(row)
+                cell6 = "N" + str(row)
                 sheet[cell6] = self.Inference[inference[cov_code[0], cov_code[1], cov_code[2], common_forms[cov_code][index][0], common_forms[cov_code][index][2]]]
+
+            cell7 = "J" + str(row)
+            sheet[cell7] = cov_code[1]
+
+            #ISO/Proprietary
+            cell8 = "D" + str(row)
+
+            if self.lob == "GL":
+                if (form_pattern[:2] == "CG" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell8] = "Proprietary"
+                else:
+                    sheet[cell8] = "ISO"
+
+            if self.lob == "CP":
+                if (form_pattern[:2] == "CP" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell8] = "Proprietary"
+                else:
+                    sheet[cell8] = "ISO"
+
+            if self.lob == "CA":
+                if (form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell8] = "Proprietary"
+                else:
+                    sheet[cell8] = "ISO"
+
+            if self.lob == "IM":
+                if (form_pattern[:2] == "IM" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell8] = "Proprietary"
+                else:
+                    sheet[cell8] = "ISO"
 
         def print_coverages(sheet, row):
             #Populate today's date
@@ -525,9 +823,9 @@ class ExcelLoaderApp:
 
             #Populate ASOLB/Major Peril Code
             cell12 = "S" + str(row)
-            sheet[cell12] = ','.join(major_peril[cov_code])
-
+            
             if self.lob == "GL":
+                sheet[cell12] = ','.join(major_peril[cov_code])
                 #Populate Subline C items
                 code = subline[cov_code]
 
@@ -560,6 +858,9 @@ class ExcelLoaderApp:
                     sheet[cell14] = "x"
                 else:
                     sheet[cell12] = str(code) + "/" + sheet[cell12].value
+            else:
+                if subline[cov_code] != '          ' and subline[cov_code] != "nan" and major_peril[cov_code] != '          ' and major_peril[cov_code] != "nan":
+                    sheet[cell12] = subline[cov_code] + "/" + major_peril[cov_code]
                 
         def print_forms(sheet, row, index, coverage_type):
             #Populate form info
@@ -636,6 +937,9 @@ class ExcelLoaderApp:
                 if self.lob == "CA" and (form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
                     sheet[cell19] = "New"
 
+                if self.lob == "IM" and form_pattern[:2] == "IM" and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                    sheet[cell19] = "New"
+
                 #ISO/Proprietary
                 cell20 = "J" + str(row)
 
@@ -653,6 +957,12 @@ class ExcelLoaderApp:
 
                 if self.lob == "CA":
                     if (form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
+                        sheet[cell20] = "Proprietary"
+                    else:
+                        sheet[cell20] = "ISO"
+
+                if self.lob == "IM":
+                    if (form_pattern[:2] == "IM" or form_pattern[:2] == "CL") and form_pattern[2:4].isnumeric() and int(form_pattern[2:4]) >= 83:
                         sheet[cell20] = "Proprietary"
                     else:
                         sheet[cell20] = "ISO"
@@ -769,14 +1079,14 @@ class ExcelLoaderApp:
                         states2 = set(self.SBT_model_covterm_options_states[clause, covterm[0]])
                     
                         if len(states2) == len(US_states) or "A1" in states2:
-                            coverage_terms_sheet[child_states2] = "All States"
+                            coverage_term_options_sheet[child_states2] = "All States"
                         elif len(states2) <= 10:
-                            coverage_terms_sheet[child_states2] = ','.join(states2)
+                            coverage_term_options_sheet[child_states2] = ','.join(states2)
                         else:
                             difference = US_states.difference(states2)
-                            coverage_terms_sheet[child_states2] = "All states except: " + ','.join(difference)
+                            coverage_term_options_sheet[child_states2] = "All states except: " + ','.join(difference)
                 else:
-                    coverage_term_options_sheet[child_states2] = ','.join(covterm_options_states[coverage_code[0], coverage_code[1], coverage_code[2], covterm])
+                    coverage_term_options_sheet[child_states2] = coverage_terms_sheet["O" + str(coverage_terms_row)].value
                 
                 coverage_terms_options_row+=1
                 option_counter+=1
@@ -803,7 +1113,7 @@ class ExcelLoaderApp:
                 coverage_terms_sheet["F" + str(coverage_terms_row)] = "SBT"
 
                 #Populate covterm name from SBT
-                coverage_terms_sheet["H" + str(coverage_terms_row)] = covterm[0]
+                coverage_terms_sheet["H" + str(coverage_terms_row)] = covterm[1]
 
                 #Populate program
                 coverage_terms_sheet["I" + str(coverage_terms_row)] = coverage_code[1]
@@ -999,7 +1309,7 @@ class ExcelLoaderApp:
         cov_states = defaultdict(set)
 
         #Hashtable for parent coverage description->ASLOB Code
-        major_peril = defaultdict(set)
+        major_peril = defaultdict()
 
         #Hashtable for parent coverage description->premium bearing
         premium = defaultdict()
@@ -1058,9 +1368,6 @@ class ExcelLoaderApp:
         #List of parent coverages within SBT model that are needed for covterm analysis
         sbt_parent_coverages = defaultdict(set)
 
-        #Dictionary of [cov code, program, entity, form number, form edition, form title]-> roll on code for inference
-
-
         for index, row in self.Coverages.iterrows():
             if not pd.isna(row["PROGRAM_NAME"]) and "FPP" not in row["PROGRAM_NAME"]:
                 #Child / Covterm
@@ -1071,10 +1378,10 @@ class ExcelLoaderApp:
                 else:
                     coverage[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = row["COVERAGE_DESC"]
                     cov_states[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()].add(row["STATE_CODE"])
-                    major_peril[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()].add(str(row["MAJOR_PERIL_C"]))
                     premium[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = row["CNTRB_TO_PREMIUM_F"]
                     existence[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = [row["REQUIRED_COV_F"], row["AUTO_ADD_COV_F"]]
-                    subline[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = row["SUBLINE_C"]
+                    subline[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = str(row["SUBLINE_C"])
+                    major_peril[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = str(row["MAJOR_PERIL_C"])
                     parent_scheduled[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = row["SCHD_COVERAGE_F"]
                     parent_id[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_C"].rstrip()] = row["PARENT_COVERAGE_ID"]
         
@@ -1128,7 +1435,7 @@ class ExcelLoaderApp:
             covterm_options_states[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip()].add(row["STATE_CODE"])
             covterm_options_list[row["COVERAGE_CODE"].rstrip(), row["PROGRAM_NAME"], row["ENTITY_CODE"].rstrip(), row["LIMIT_DED_OCCUR_C"].rstrip()].add(row["LIMIT_DED_DESC"])
 
-        #Gather exclusions, conditions and common forms
+        #Gather exclusions, conditions and common forms from Forms to Coverages File
         for cov in coverage:
             if cov in parent_forms:
                 for form in parent_forms[cov][:]:
@@ -1207,10 +1514,65 @@ class ExcelLoaderApp:
                             #Add form to conditions dictionary and remove it from the parent form dictionary so that it only prints in the 'Common Forms' tab
                             common_forms[cov].append(form)
                             parent_forms[cov].remove(form)
+
+                    elif self.lob == "IM" and ((form_pattern[:2] != "IM" or (form_pattern[:2] == "IM" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
+                            #If the coverage isn't already in the hashtable as a key, add it now
+                            if cov not in common_forms:
+                                common_forms[cov] = []
+                            
+                            #Add form to conditions dictionary and remove it from the parent form dictionary so that it only prints in the 'Common Forms' tab
+                            common_forms[cov].append(form)
+                            parent_forms[cov].remove(form)
                     
                     else:
                         pass
+        
+        qrg_sbt_forms = []
+        qrg_sbt_exclusions = []
+        qrg_sbt_conditions = []
+        qrg_state_amendatory = []
+        qrg_common = [] 
 
+        #Gather exclusions, conditions and common forms from QRG Forms
+        for form in self.QRG_forms:
+            form_pattern = form[0].replace(" ","") + form[2].replace('/'," ").replace(" ","")
+            
+            if form_pattern in sbt_type:
+                #Check the last 4 characters in the 'Type' column within SBT extract
+                suffix = sbt_type[form_pattern][-4:]
+
+                #If the last 4 characters are 'Excl' it's an exclusion
+                if suffix == "Excl":
+                    qrg_sbt_exclusions.append(form)
+                if suffix == "Cond":
+                    qrg_sbt_conditions.append(form)
+                if suffix == "Cov":
+                    qrg_sbt_forms.append(form)
+            
+            elif "Amendatory" in form[1]:
+                if form not in state_amendatory.values():
+                    qrg_state_amendatory.append(form)
+            
+            elif self.lob == "GL" and ((form_pattern[:2] != "CG" or (form_pattern[:2] == "CG" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
+                if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                    qrg_common.append(form)
+                    
+            elif self.lob == "CP" and ((form_pattern[:2] != "CP" or (form_pattern[:2] == "CP" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
+                if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                    qrg_common.append(form)
+
+            elif self.lob == "CA":
+                if (form_pattern[:2] != "CA" and form_pattern[:2] != "CC") or ("TC" in form[0]) or ((form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and not form_pattern[2:4].isnumeric()):
+                    if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                        qrg_common.append(form)
+
+            elif self.lob == "IM" and ((form_pattern[:2] != "IM" or (form_pattern[:2] == "IM" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
+                if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                    qrg_common.append(form)
+
+            else:
+                pass
+            
         #Begin writing to product model
         product_model = openpyxl.load_workbook(self.template)
 
@@ -1314,7 +1676,26 @@ class ExcelLoaderApp:
                     state_amendatory_index+=1
                     state_amendatory_row+=1
 
-            
+        for form in qrg_sbt_forms:
+            sheet = product_model["Coverages & Forms"]
+            coverages_and_forms_row = print_qrg_sbt_forms(sheet, coverages_and_forms_row, form)
+
+        for form in qrg_sbt_exclusions:
+            sheet = product_model["Exclusions & Forms"]
+            exclusions_and_forms_row = print_qrg_sbt_forms(sheet, exclusions_and_forms_row, form)
+
+        for form in qrg_sbt_conditions:
+            sheet = product_model["Conditions & Forms"]
+            conditions_and_forms_row = print_qrg_sbt_forms(sheet, conditions_and_forms_row, form)
+
+        for form in qrg_state_amendatory:
+            sheet = product_model["State Amendatory Endorsements"]
+            state_amendatory_row = print_qrg_forms(sheet, state_amendatory_row, form)
+
+        for form in qrg_common:
+            sheet = product_model["Common Forms"]
+            common_forms_row = print_qrg_forms(sheet, common_forms_row, form)
+
         #Begin writing to Coverage Terms worksheet
         coverage_terms_sheet = product_model["Coverage terms"]
         coverage_terms_row = 3
