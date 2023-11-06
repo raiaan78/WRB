@@ -1267,7 +1267,7 @@ class ExcelLoaderApp:
 
             return coverage_terms_row, coverage_terms_options_row
     
-        self.files_used = ', '.join(self.loaded_files[:6])
+        self.files_used = ', '.join(self.loaded_files[:7])
 
         ou_and_uw_exclusions = self.Exclusions.groupby('COVERAGE_CODE')[['PRODUCT_NAME', 'COMPANY_NAME']].apply(lambda x: x.values.tolist()).to_dict()
 
