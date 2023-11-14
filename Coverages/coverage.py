@@ -1526,17 +1526,28 @@ class ExcelLoaderApp:
                     
                     else:
                         pass
+
+                if len(parent_forms[cov]) == 0:
+                    parent_forms.pop(cov)
         
         qrg_sbt_forms = []
         qrg_sbt_exclusions = []
         qrg_sbt_conditions = []
         qrg_state_amendatory = []
         qrg_common = [] 
+        qrg_exclusions = []
+
+        flattened_common = list(itertools.chain.from_iterable(common_forms.values()))
+        flattened_exclusions = list(itertools.chain.from_iterable(exclusions.values()))
+        flattened_state_amendatory = list(itertools.chain.from_iterable(state_amendatory.values()))
+        flattened_parents = list(itertools.chain.from_iterable(parent_forms.values()))
+        flattened_conditions = list(itertools.chain.from_iterable(conditions.values()))
 
         #Gather exclusions, conditions and common forms from QRG Forms
         for form in self.QRG_forms:
             form_pattern = form[0].replace(" ","") + form[2].replace('/'," ").replace(" ","")
-            
+            temp_form = list(form)
+        
             if form_pattern in sbt_type:
                 #Check the last 4 characters in the 'Type' column within SBT extract
                 suffix = sbt_type[form_pattern][-4:]
@@ -1550,24 +1561,28 @@ class ExcelLoaderApp:
                     qrg_sbt_forms.append(form)
             
             elif "Amendatory" in form[1]:
-                if form not in state_amendatory.values():
+                if temp_form not in flattened_state_amendatory:
                     qrg_state_amendatory.append(form)
+
+            elif "Exclusion" in form[1]:
+                if temp_form not in flattened_exclusions:
+                    qrg_exclusions.append(form)
             
             elif self.lob == "GL" and ((form_pattern[:2] != "CG" or (form_pattern[:2] == "CG" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
-                if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                if temp_form not in flattened_parents and temp_form not in flattened_exclusions and temp_form not in flattened_conditions and temp_form not in flattened_common:
                     qrg_common.append(form)
                     
             elif self.lob == "CP" and ((form_pattern[:2] != "CP" or (form_pattern[:2] == "CP" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
-                if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                if temp_form not in flattened_parents and temp_form not in flattened_exclusions and temp_form not in flattened_conditions and temp_form not in flattened_common:
                     qrg_common.append(form)
 
             elif self.lob == "CA":
                 if (form_pattern[:2] != "CA" and form_pattern[:2] != "CC") or ("TC" in form[0]) or ((form_pattern[:2] == "CA" or form_pattern[:2] == "CC") and not form_pattern[2:4].isnumeric()):
-                    if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                    if temp_form not in flattened_parents and temp_form not in flattened_exclusions and temp_form not in flattened_conditions and temp_form not in flattened_common:
                         qrg_common.append(form)
 
             elif self.lob == "IM" and ((form_pattern[:2] != "IM" or (form_pattern[:2] == "IM" and not form_pattern[2:4].isnumeric())) or "TC" in form[0]):
-                if form not in parent_forms.values() and form not in exclusions.values() and form not in conditions.values() and form not in common_forms.values():
+                if temp_form not in flattened_parents and temp_form not in flattened_exclusions and temp_form not in flattened_conditions and temp_form not in flattened_common:
                     qrg_common.append(form)
 
             else:
@@ -1606,17 +1621,21 @@ class ExcelLoaderApp:
             if num_coverage_rows > 0:
                 cov_index = 0 
                 sheet = product_model["Coverages & Forms"]
-                
-                while cov_index <= num_coverage_rows - 1:
-                     #Check if this coverage has a form
-                    if cov_code in parent_forms and cov_index < num_coverage_rows:
-                        current_row = print_forms(sheet, coverages_and_forms_row, cov_index, "General")
-                    
-                    while coverages_and_forms_row < current_row:
-                        print_coverages(sheet, coverages_and_forms_row)
-                        coverages_and_forms_row+=1
-                    
-                    cov_index+=1
+
+                if cov_code in parent_forms:
+                    while cov_index <= num_coverage_rows - 1:
+                        #Check if this coverage has a form
+                        if cov_index < num_coverage_rows:
+                            current_row = print_forms(sheet, coverages_and_forms_row, cov_index, "General")
+                        
+                        while coverages_and_forms_row < current_row:
+                            print_coverages(sheet, coverages_and_forms_row)
+                            coverages_and_forms_row+=1
+                        
+                        cov_index+=1
+                else:
+                    print_coverages(sheet, coverages_and_forms_row)
+                    coverages_and_forms_row+=1
 
             if num_exclusion_rows > 0:
                 exclusion_index = 0
@@ -1693,6 +1712,10 @@ class ExcelLoaderApp:
             state_amendatory_row = print_qrg_forms(sheet, state_amendatory_row, form)
 
         for form in qrg_common:
+            sheet = product_model["Common Forms"]
+            common_forms_row = print_qrg_forms(sheet, common_forms_row, form)
+
+        for form in qrg_exclusions:
             sheet = product_model["Common Forms"]
             common_forms_row = print_qrg_forms(sheet, common_forms_row, form)
 
